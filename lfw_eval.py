@@ -6,7 +6,9 @@ import torchvision.transforms as transforms
 import torch
 from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
-
+from tqdm import tqdm
+from evaluation.recall import recall_at_ks
+import time
 cudnn.benchmark = True
 
 import net
@@ -108,6 +110,57 @@ def eval(model, model_path=None, is_gray=False):
     print('LFWACC={:.4f} std={:.4f} thd={:.4f}'.format(np.mean(accuracy), np.std(accuracy), np.mean(thd)))
 
     return np.mean(accuracy), predicts
+
+
+def predict_batchwise(model, dataloader):
+    '''
+        Predict on a batch
+        :return: list with N lists, where N = |{image, label, index}|
+    '''
+    # print(list(model.parameters())[0].device)
+    model_is_training = model.training
+    model.eval()
+    ds = dataloader.dataset
+    A = [[] for i in range(len(ds[0]))]
+    with torch.no_grad():
+        # extract batches (A becomes list of samples)
+        for batch in tqdm(dataloader, desc="Batch-wise prediction"):
+            for i, J in enumerate(batch):
+                # i = 0: sz_batch * images
+                # i = 1: sz_batch * labels
+                # i = 2: sz_batch * indices
+                if i == 0:
+                    # move images to device of model (approximate device)
+                    J = J.to(list(model.parameters())[0].device)
+                    # predict model output for image
+                    J = model(J).cpu()
+                for j in J:
+                    #if i == 1: print(j)
+                    A[i].append(j)
+    model.train()
+    model.train(model_is_training) # revert to previous training state
+    return [torch.stack(A[i]) for i in range(len(A))]
+
+def evaluate(model, dataloader, eval_nmi=False, recall_list=[1, 2, 4, 8]):
+    '''
+        Evaluation on dataloader
+        :param model: embedding model
+        :param dataloader: dataloader
+        :param eval_nmi: evaluate NMI (Mutual information between clustering on embedding and the gt class labels) or not
+        :param recall_list: recall@K
+    '''
+    eval_time = time.time()
+    nb_classes = dataloader.dataset.nb_classes()
+
+    # calculate embeddings with model and get targets
+    X, T, *_ = predict_batchwise(model, dataloader)
+    print('done collecting prediction')
+
+    nmi, recall = recall_at_ks(X, T, ks=recall_list)
+    for i in recall_list:
+        print("Recall@{} {:.3f}".format(i, recall[i]))
+    return nmi, recall
+
 
 
 if __name__ == '__main__':

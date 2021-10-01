@@ -1,7 +1,17 @@
 import torch
 import torch.nn as nn
+import math
+import torch.utils.model_zoo as model_zoo
+import torch.nn.utils.weight_norm as weight_norm
+import torch.nn.functional as F
 
+import torchvision.models as models
+import numpy as np
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.model_zoo as model_zoo
 
 # -------------------------------------- sphere network Begin --------------------------------------
 class Block(nn.Module):
@@ -179,3 +189,48 @@ def LResNet50E_IR(is_gray=False):
     layers = [3, 4, 14, 3]
     return LResNet(BlockIR, layers, filter_list, is_gray)
 # ---------------------------------- LResNet50E-IR network End ----------------------------------
+
+
+class Feature(nn.Module):
+    '''
+        Feature embedding network
+    '''
+    def __init__(self, model='resnet50', pool='avg', use_lnorm=False):
+        nn.Module.__init__(self)
+        self.model = model
+
+        self.base = models.__dict__[model](pretrained=True)
+        if pool == 'avg':
+            self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        elif pool == 'max':
+            self.pool = nn.AdaptiveMaxPool2d((1, 1))
+        else:
+            raise Exception('pool: %s pool must be avg or max', str(pool))
+
+        self.lnorm = None
+        if use_lnorm:
+            self.lnorm = nn.LayerNorm(2048, elementwise_affine=False).cuda()
+
+    def forward(self, x):
+        x = self.base.conv1(x)
+        x = self.base.bn1(x)
+        x = self.base.relu(x)
+        x = self.base.maxpool(x)
+
+        x = self.base.layer1(x)
+        x = self.base.layer2(x)
+        x = self.base.layer3(x)
+        x = self.base.layer4(x)
+        x1 = self.pool(x)
+        x = x1
+        x = x.reshape(x.size(0), -1)
+
+        if self.lnorm != None:
+            x = self.lnorm(x)
+
+        return x
+
+class resnet50(Feature):
+     def __init__(self):
+        Feature.__init__(self, model='resnet50', pool='max', use_lnorm=True)
+
